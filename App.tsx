@@ -33,7 +33,7 @@ const initialPaginationState: PaginationState = {
 };
 
 const MUSIC_URL = "https://eta.vgmtreasurechest.com/soundtracks/alice-madness-returns/beihnoxxys/01.%20Main%20Theme.mp3";
-const MUSIC_LOOP_POINT = 75;
+const MUSIC_LOOP_POINT = 75; // seconds
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>('menu');
@@ -55,9 +55,8 @@ const App: React.FC = () => {
   const [isSettingsBarVisible, setIsSettingsBarVisible] = useState<boolean>(false); 
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [isMusicMuted, setIsMusicMuted] = useState<boolean>(true); // Default to muted
+  const [isMusicMuted, setIsMusicMuted] = useState<boolean>(false); // Default to unmuted
   const [userInteractedOnce, setUserInteractedOnce] = useState<boolean>(false); 
-  const [isMusicPlayingOnMenu, setIsMusicPlayingOnMenu] = useState<boolean>(false);
 
   const mainContentRef = useRef<HTMLElement>(null);
 
@@ -76,6 +75,7 @@ const App: React.FC = () => {
       if (!userInteractedOnce) {
         setUserInteractedOnce(true);
       }
+      // Clean up listeners once interaction occurs
       document.removeEventListener('click', handleFirstInteraction, { capture: true });
       document.removeEventListener('touchstart', handleFirstInteraction, { capture: true });
     };
@@ -86,36 +86,38 @@ const App: React.FC = () => {
     }
 
     return () => {
+      // Ensure cleanup if component unmounts before interaction
       document.removeEventListener('click', handleFirstInteraction, { capture: true });
       document.removeEventListener('touchstart', handleFirstInteraction, { capture: true });
     };
   }, [userInteractedOnce]);
 
 
+  // Effect to control music play/pause based on interaction and mute state
   useEffect(() => {
     const audio = audioRef.current;
     if (audio) {
-      if (userInteractedOnce && gameState === 'menu' && !isMusicMuted) {
-        audio.play()
-          .then(() => {
-            setIsMusicPlayingOnMenu(true);
-          })
-          .catch(e => {
-            console.warn("Menu audio play prevented:", e);
-            setIsMusicPlayingOnMenu(false); 
+      if (userInteractedOnce && !isMusicMuted) {
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(e => {
+            console.warn("Audio play prevented by browser policy:", e);
+            // If autoplay is blocked, user might need to interact again or unmute/mute.
+            // UI could reflect this if necessary.
           });
+        }
       } else {
         audio.pause();
-        setIsMusicPlayingOnMenu(false); 
       }
     }
-  }, [userInteractedOnce, gameState, isMusicMuted]);
+  }, [userInteractedOnce, isMusicMuted, gameState]); // gameState included to re-evaluate if audio element context changes
 
+  // Effect to handle music looping
   useEffect(() => {
     const audio = audioRef.current;
     if (audio) {
       const handleTimeUpdate = () => {
-        if (isMusicPlayingOnMenu && !audio.paused && audio.currentTime >= MUSIC_LOOP_POINT) {
+        if (userInteractedOnce && !isMusicMuted && !audio.paused && audio.currentTime >= MUSIC_LOOP_POINT) {
           audio.currentTime = 0;
           audio.play().catch(e => console.warn("Audio play on loop prevented:", e));
         }
@@ -125,7 +127,7 @@ const App: React.FC = () => {
         audio.removeEventListener('timeupdate', handleTimeUpdate);
       };
     }
-  }, [isMusicPlayingOnMenu]);
+  }, [userInteractedOnce, isMusicMuted, MUSIC_LOOP_POINT]);
 
   const geminiService = useMemo(() => {
     if (!ENABLE_IMAGE_GENERATION) {
@@ -154,7 +156,7 @@ const App: React.FC = () => {
       setIsInitialCheckComplete(true); // Mark check as complete
       return null;
     }
-  }, []); // Empty dependency array, runs once on mount
+  }, []); 
 
 
   const resetPaginationStates = () => {
@@ -163,7 +165,7 @@ const App: React.FC = () => {
 
   const displayCurrentPageFromPagination = useCallback(async () => {
     if (!pagination.isPaginating || !pagination.finalNodeOfSequence || pagination.pages.length === 0) {
-      setIsLoading(false); // Ensure loading is false if we bail early
+      setIsLoading(false); 
       return;
     }
     
@@ -185,17 +187,16 @@ const App: React.FC = () => {
     if (pagination.currentPageIndex === 0) { 
       if (ENABLE_IMAGE_GENERATION && geminiService && currentPageData.imagePromptSeed) {
         try {
-          setIsLoading(true); // Show loading specifically for image generation
+          setIsLoading(true); 
           const imageUrl = await geminiService.generateImageForScene(currentPageData.imagePromptSeed);
           setCurrentImageUrl(imageUrl);
         } catch (imgError) {
           console.error("Image generation error for page:", imgError);
           setCurrentImageUrl(`https://picsum.photos/seed/${encodeURIComponent(currentPageData.imagePromptSeed.substring(0,20))}/600/400?blur=2&grayscale&random=${Math.random()}`);
         } finally {
-          // Ensure loading is turned off after image attempt, whether first page or not
-          // setIsLoading(false); // This will be handled by the outer setIsLoading(false)
+          // setIsLoading(false); // Handled by the outer setIsLoading(false)
         }
-      } else if (currentPageData.imagePromptSeed) { // Fallback if image gen disabled or no service/seed
+      } else if (currentPageData.imagePromptSeed) { 
         setCurrentImageUrl(`https://picsum.photos/seed/${encodeURIComponent(currentPageData.imagePromptSeed.substring(0,20))}/600/400?grayscale&blur=1&random=${Math.random()}`);
       } else {
         setCurrentImageUrl(null);
@@ -204,7 +205,7 @@ const App: React.FC = () => {
         setCurrentImageUrl(null); 
     }
     
-    setIsLoading(false); // General loading indicator for page content
+    setIsLoading(false); 
 
   }, [pagination, geminiService]);
 
@@ -340,8 +341,6 @@ const App: React.FC = () => {
       
       setCurrentSceneIdForProgression(finalNodeForDisplay.id); 
       setGameState(finalNodeForDisplay.isEnding ? 'ended' : 'playing');
-      // Image generation and setIsLoading(false) are now handled by displayCurrentPageFromPagination
-      // which is triggered by the setPagination effect.
 
     } catch (storyError) {
       console.error("Error processing story node chain:", storyError);
@@ -352,25 +351,20 @@ const App: React.FC = () => {
           choices: [], gameOver: true, gameWin: false, message: `Error loading story.`, endingType: 'lose'
       });
       setGameState('ended'); 
-      setIsLoading(false); // Ensure loading is off on error
+      setIsLoading(false); 
     } finally {
       if (isRewindContextFetch) { 
         setIsPerformingRewindFetch(false); 
       }
-      // General setIsLoading(false) is now primarily handled by displayCurrentPageFromPagination
     }
-  }, [isPerformingRewindFetch, maxAchievedHistory, geminiService]); // geminiService added as dep
+  }, [isPerformingRewindFetch, maxAchievedHistory, geminiService]); 
 
   useEffect(() => {
     if (pagination.isPaginating && pagination.pages.length > 0 && pagination.finalNodeOfSequence) {
       displayCurrentPageFromPagination();
     } else if (!pagination.isPaginating && isLoading && !isPerformingRewindFetch) {
-        // If not paginating, not rewinding, but still loading, something might be amiss or it's an initial load.
-        // displayCurrentPageFromPagination should handle turning off loading for pagination.
-        // fetchAdventureNode should manage its own loading state or trigger pagination.
-        // This specific condition might indicate an unhandled loading state.
-        // For now, let's assume other logic correctly sets isLoading to false.
-        // If issues persist, this might need revisiting.
+        // This condition might indicate an unhandled loading state.
+        // For now, assume other logic correctly sets isLoading to false.
     }
   }, [pagination, displayCurrentPageFromPagination, isLoading, isPerformingRewindFetch]);
 
@@ -382,18 +376,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (isInitialCheckComplete && gameState === 'loading' && currentSceneIdForProgression && !pagination.isPaginating) {
-      // The problematic 'if' block that was here has been removed.
-      // If gameState is 'loading', API key checks (if ENABLE_IMAGE_GENERATION is true)
-      // have already been passed by geminiService useMemo and startGame function.
       fetchAdventureNode(currentSceneIdForProgression);
     }
   }, [isInitialCheckComplete, gameState, currentSceneIdForProgression, fetchAdventureNode, geminiService, pagination.isPaginating]);
 
 
   const startGame = () => {
-    // If image generation is enabled but service failed to init (API key issue), prevent starting.
     if (ENABLE_IMAGE_GENERATION && !geminiService) {
-      if (gameState !== 'error_apikey') { // Ensure error state is set if not already
+      if (gameState !== 'error_apikey') { 
         setError("Cannot start game: API Key is required for image generation but is missing or invalid.");
         setGameState('error_apikey');
       }
@@ -405,7 +395,7 @@ const App: React.FC = () => {
     setCurrentSceneIdForProgression(START_NODE_ID);
     setCurrentStory(null);
     setCurrentImageUrl(null);
-    setError(null); // Clear previous errors
+    setError(null); 
     setIsTimelineVisible(false);
     setIsPerformingRewindFetch(false); 
     resetPaginationStates();
@@ -468,7 +458,6 @@ const App: React.FC = () => {
     setIsSettingsBarVisible(false);
     setCurrentStory(null); 
     setCurrentImageUrl(null); 
-    // setError(null); // Keep API key error if it exists and images are enabled
     setIsLoading(false); 
     setGameState('menu');
   };
@@ -501,7 +490,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (gameState === 'error_apikey') { // This screen is now only shown if ENABLE_IMAGE_GENERATION is true & key fails
+  if (gameState === 'error_apikey') { 
     return (
       <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
         <header className="mb-8 text-center">
@@ -531,29 +520,9 @@ const App: React.FC = () => {
 
 
   if (gameState === 'menu') {
-    if (!isMusicPlayingOnMenu && userInteractedOnce && !isMusicMuted) { // Show loader only after interaction if music isn't playing & not muted
-      return (
-        <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
-          <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
-          <header className="mb-10 text-center">
-            <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-red-700 via-red-600 to-red-500 animate-pulse">
-              The Housemaid
-            </h1>
-          </header>
-          <main className="w-full max-w-sm text-center">
-            <LoadingIndicator text="Setting the scene..." />
-          </main>
-          <footer className="mt-12 text-center text-sm text-gray-500">
-            <p>Story inspired by The Housemaid by Freida McFadden. App by Moe.</p>
-          </footer>
-        </div>
-      );
-    }
-    
-    // If music is playing OR user hasn't interacted yet (initial prompt) OR music is muted
     return (
       <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
-         <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
+         <audio ref={audioRef} src={MUSIC_URL} preload="auto" loop={false} /> {/* Loop handled by effect */}
         <header className="mb-10 text-center">
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-red-700 via-red-600 to-red-500 animate-pulse">
             The Housemaid
@@ -561,12 +530,12 @@ const App: React.FC = () => {
           {!userInteractedOnce && (
              <p className="text-gray-400 mt-4 text-lg">Tap anywhere to immerse yourself.</p>
           )}
-          {userInteractedOnce && (isMusicPlayingOnMenu || isMusicMuted) && ( // Show subtitle if interacted and either music playing or it's muted (meaning intent to play if unmuted is there)
+          {userInteractedOnce && (
              <p className="text-gray-400 mt-4 text-lg">The house holds its breath. Your choices define the silence.</p>
           )}
         </header>
         <main className="w-full max-w-sm">
-          {(userInteractedOnce && (isMusicPlayingOnMenu || isMusicMuted)) && ( // Show button if interacted and music is ready or muted
+          {userInteractedOnce && ( 
             <ActionButton
               text="Begin Chapter 1"
               onClick={startGame}
@@ -583,7 +552,7 @@ const App: React.FC = () => {
 
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center p-4 sm:p-6">
-       <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
+       <audio ref={audioRef} src={MUSIC_URL} preload="auto" loop={false} /> {/* Loop handled by effect */}
       <header className="w-full max-w-3xl mb-6 sm:mb-8 flex justify-between items-center">
         <button 
           onClick={toggleSettingsBar} 
