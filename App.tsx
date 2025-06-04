@@ -55,7 +55,7 @@ const App: React.FC = () => {
   const [isSettingsBarVisible, setIsSettingsBarVisible] = useState<boolean>(false); 
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [isMusicMuted, setIsMusicMuted] = useState<boolean>(false);
+  const [isMusicMuted, setIsMusicMuted] = useState<boolean>(true); // Default to muted
   const [userInteractedOnce, setUserInteractedOnce] = useState<boolean>(false); 
   const [isMusicPlayingOnMenu, setIsMusicPlayingOnMenu] = useState<boolean>(false);
 
@@ -481,7 +481,7 @@ const App: React.FC = () => {
 
   const handlePreviousPage = () => {
      if (pagination.currentPageIndex > 0) {
-      setPagination(prev => ({ ...prev, currentPageIndex: prev.currentPageIndex + 1 }));
+      setPagination(prev => ({ ...prev, currentPageIndex: prev.currentPageIndex - 1 }));
     }
   };
   
@@ -531,7 +531,7 @@ const App: React.FC = () => {
 
 
   if (gameState === 'menu') {
-    if (!isMusicPlayingOnMenu && userInteractedOnce) { // Show loader only after interaction if music isn't playing
+    if (!isMusicPlayingOnMenu && userInteractedOnce && !isMusicMuted) { // Show loader only after interaction if music isn't playing & not muted
       return (
         <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
           <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
@@ -550,7 +550,7 @@ const App: React.FC = () => {
       );
     }
     
-    // If music is playing OR user hasn't interacted yet (initial prompt)
+    // If music is playing OR user hasn't interacted yet (initial prompt) OR music is muted
     return (
       <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
          <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
@@ -561,12 +561,12 @@ const App: React.FC = () => {
           {!userInteractedOnce && (
              <p className="text-gray-400 mt-4 text-lg">Tap anywhere to immerse yourself.</p>
           )}
-          {userInteractedOnce && isMusicPlayingOnMenu && (
+          {userInteractedOnce && (isMusicPlayingOnMenu || isMusicMuted) && ( // Show subtitle if interacted and either music playing or it's muted (meaning intent to play if unmuted is there)
              <p className="text-gray-400 mt-4 text-lg">The house holds its breath. Your choices define the silence.</p>
           )}
         </header>
         <main className="w-full max-w-sm">
-          {(userInteractedOnce && isMusicPlayingOnMenu) && (
+          {(userInteractedOnce && (isMusicPlayingOnMenu || isMusicMuted)) && ( // Show button if interacted and music is ready or muted
             <ActionButton
               text="Begin Chapter 1"
               onClick={startGame}
