@@ -49,7 +49,7 @@ const App: React.FC = () => {
   const [isTimelineVisible, setIsTimelineVisible] = useState<boolean>(false);
   const [isPerformingRewindFetch, setIsPerformingRewindFetch] = useState<boolean>(false);
   
-  const [apiKeyChecked, setApiKeyChecked] = useState<boolean>(false);
+  const [isInitialCheckComplete, setIsInitialCheckComplete] = useState<boolean>(false);
 
   const [pagination, setPagination] = useState<PaginationState>(initialPaginationState);
   const [isSettingsBarVisible, setIsSettingsBarVisible] = useState<boolean>(false); 
@@ -76,7 +76,6 @@ const App: React.FC = () => {
       if (!userInteractedOnce) {
         setUserInteractedOnce(true);
       }
-      // Clean up listeners after first interaction
       document.removeEventListener('click', handleFirstInteraction, { capture: true });
       document.removeEventListener('touchstart', handleFirstInteraction, { capture: true });
     };
@@ -87,7 +86,6 @@ const App: React.FC = () => {
     }
 
     return () => {
-      // Ensure listeners are removed if component unmounts before interaction
       document.removeEventListener('click', handleFirstInteraction, { capture: true });
       document.removeEventListener('touchstart', handleFirstInteraction, { capture: true });
     };
@@ -104,7 +102,7 @@ const App: React.FC = () => {
           })
           .catch(e => {
             console.warn("Menu audio play prevented:", e);
-            setIsMusicPlayingOnMenu(false); // Explicitly set if play fails
+            setIsMusicPlayingOnMenu(false); 
           });
       } else {
         audio.pause();
@@ -127,19 +125,37 @@ const App: React.FC = () => {
         audio.removeEventListener('timeupdate', handleTimeUpdate);
       };
     }
-  }, [isMusicPlayingOnMenu]); // Depends on music actually playing on menu
+  }, [isMusicPlayingOnMenu]);
 
   const geminiService = useMemo(() => {
+    if (!ENABLE_IMAGE_GENERATION) {
+      setIsInitialCheckComplete(true); // Mark check as complete, no API key needed
+      return null;
+    }
+
+    // Image generation IS enabled, API key IS required
     const apiKey = process.env.API_KEY;
     if (apiKey) {
-      setApiKeyChecked(true);
-      return new GeminiService(apiKey);
+      try {
+        const service = new GeminiService(apiKey);
+        setIsInitialCheckComplete(true); // Mark check as complete
+        return service;
+      } catch (e) {
+        console.error("Failed to initialize GeminiService:", e);
+        setError(`Error initializing AI services: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        setGameState('error_apikey'); // Set error state
+        setIsInitialCheckComplete(true); // Mark check as complete
+        return null;
+      }
+    } else {
+      // API key is required but not found
+      setError("API Key not found. Image generation is enabled and requires an API Key. Please configure it or disable image generation in constants.ts.");
+      setGameState('error_apikey'); // Set error state
+      setIsInitialCheckComplete(true); // Mark check as complete
+      return null;
     }
-    setApiKeyChecked(true); 
-    setGameState('error_apikey');
-    setError("API Key not found. This application requires an API Key for AI services to function. Please ensure it's configured correctly in your environment.");
-    return null;
-  }, []);
+  }, []); // Empty dependency array, runs once on mount
+
 
   const resetPaginationStates = () => {
     setPagination(initialPaginationState);
@@ -147,6 +163,7 @@ const App: React.FC = () => {
 
   const displayCurrentPageFromPagination = useCallback(async () => {
     if (!pagination.isPaginating || !pagination.finalNodeOfSequence || pagination.pages.length === 0) {
+      setIsLoading(false); // Ensure loading is false if we bail early
       return;
     }
     
@@ -168,13 +185,17 @@ const App: React.FC = () => {
     if (pagination.currentPageIndex === 0) { 
       if (ENABLE_IMAGE_GENERATION && geminiService && currentPageData.imagePromptSeed) {
         try {
+          setIsLoading(true); // Show loading specifically for image generation
           const imageUrl = await geminiService.generateImageForScene(currentPageData.imagePromptSeed);
           setCurrentImageUrl(imageUrl);
         } catch (imgError) {
           console.error("Image generation error for page:", imgError);
           setCurrentImageUrl(`https://picsum.photos/seed/${encodeURIComponent(currentPageData.imagePromptSeed.substring(0,20))}/600/400?blur=2&grayscale&random=${Math.random()}`);
+        } finally {
+          // Ensure loading is turned off after image attempt, whether first page or not
+          // setIsLoading(false); // This will be handled by the outer setIsLoading(false)
         }
-      } else if (currentPageData.imagePromptSeed) {
+      } else if (currentPageData.imagePromptSeed) { // Fallback if image gen disabled or no service/seed
         setCurrentImageUrl(`https://picsum.photos/seed/${encodeURIComponent(currentPageData.imagePromptSeed.substring(0,20))}/600/400?grayscale&blur=1&random=${Math.random()}`);
       } else {
         setCurrentImageUrl(null);
@@ -183,7 +204,7 @@ const App: React.FC = () => {
         setCurrentImageUrl(null); 
     }
     
-    setIsLoading(false);
+    setIsLoading(false); // General loading indicator for page content
 
   }, [pagination, geminiService]);
 
@@ -319,6 +340,8 @@ const App: React.FC = () => {
       
       setCurrentSceneIdForProgression(finalNodeForDisplay.id); 
       setGameState(finalNodeForDisplay.isEnding ? 'ended' : 'playing');
+      // Image generation and setIsLoading(false) are now handled by displayCurrentPageFromPagination
+      // which is triggered by the setPagination effect.
 
     } catch (storyError) {
       console.error("Error processing story node chain:", storyError);
@@ -329,31 +352,27 @@ const App: React.FC = () => {
           choices: [], gameOver: true, gameWin: false, message: `Error loading story.`, endingType: 'lose'
       });
       setGameState('ended'); 
-      setIsLoading(false); 
+      setIsLoading(false); // Ensure loading is off on error
     } finally {
       if (isRewindContextFetch) { 
         setIsPerformingRewindFetch(false); 
       }
+      // General setIsLoading(false) is now primarily handled by displayCurrentPageFromPagination
     }
-  }, [isPerformingRewindFetch, maxAchievedHistory, geminiService]); 
+  }, [isPerformingRewindFetch, maxAchievedHistory, geminiService]); // geminiService added as dep
 
   useEffect(() => {
     if (pagination.isPaginating && pagination.pages.length > 0 && pagination.finalNodeOfSequence) {
       displayCurrentPageFromPagination();
-    } else if (!pagination.isPaginating && isLoading) { 
-        // This specific condition was causing issues with rewind loading.
-        // If we are not paginating, but isLoading is true (e.g., after a rewind initiated `fetchAdventureNode`),
-        // and `displayCurrentPageFromPagination` didn't run (because `isPaginating` was false then),
-        // the `isLoading` might not be turned off by `displayCurrentPageFromPagination`.
-        // However, fetchAdventureNode itself now handles setting isLoading to false in its finally block
-        // if it's a rewind context, or `displayCurrentPageFromPagination` handles it for normal flow.
-        // This else-if might be redundant or handled better by ensuring `isLoading` is false after `fetchAdventureNode` finishes in all cases.
-        // Let's verify if `displayCurrentPageFromPagination`'s `setIsLoading(false)` is robust enough.
-        // The issue was more likely that `displayCurrentPageFromPagination` itself was not correctly
-        // setting isLoading to false after a rewind if it was displaying a page that wasn't the *first*
-        // of the reconstructed sequence. This was addressed by ensuring `displayCurrentPageFromPagination` *always* sets `isLoading = false`.
+    } else if (!pagination.isPaginating && isLoading && !isPerformingRewindFetch) {
+        // If not paginating, not rewinding, but still loading, something might be amiss or it's an initial load.
+        // displayCurrentPageFromPagination should handle turning off loading for pagination.
+        // fetchAdventureNode should manage its own loading state or trigger pagination.
+        // This specific condition might indicate an unhandled loading state.
+        // For now, let's assume other logic correctly sets isLoading to false.
+        // If issues persist, this might need revisiting.
     }
-  }, [pagination, displayCurrentPageFromPagination, isLoading]);
+  }, [pagination, displayCurrentPageFromPagination, isLoading, isPerformingRewindFetch]);
 
   useEffect(() => {
     if (mainContentRef.current) {
@@ -362,26 +381,31 @@ const App: React.FC = () => {
   }, [pagination.currentPageIndex, currentStory?.sceneId]); 
 
   useEffect(() => {
-    if (!geminiService && apiKeyChecked && !process.env.API_KEY) {
-        setGameState('error_apikey');
-        setError("API Key not found. This application requires an API Key for AI services to function. Please ensure it's configured correctly in your environment.");
-        setIsLoading(false); 
-        return;
-    }
-
-    if (gameState === 'loading' && apiKeyChecked && currentSceneIdForProgression && !pagination.isPaginating) {
+    if (isInitialCheckComplete && gameState === 'loading' && currentSceneIdForProgression && !pagination.isPaginating) {
+      // The problematic 'if' block that was here has been removed.
+      // If gameState is 'loading', API key checks (if ENABLE_IMAGE_GENERATION is true)
+      // have already been passed by geminiService useMemo and startGame function.
       fetchAdventureNode(currentSceneIdForProgression);
     }
-  }, [currentSceneIdForProgression, gameState, fetchAdventureNode, apiKeyChecked, geminiService, pagination.isPaginating]);
+  }, [isInitialCheckComplete, gameState, currentSceneIdForProgression, fetchAdventureNode, geminiService, pagination.isPaginating]);
 
 
   const startGame = () => {
+    // If image generation is enabled but service failed to init (API key issue), prevent starting.
+    if (ENABLE_IMAGE_GENERATION && !geminiService) {
+      if (gameState !== 'error_apikey') { // Ensure error state is set if not already
+        setError("Cannot start game: API Key is required for image generation but is missing or invalid.");
+        setGameState('error_apikey');
+      }
+      return;
+    }
+
     setGameplayPathHistory([]); 
     setMaxAchievedHistory([]); 
     setCurrentSceneIdForProgression(START_NODE_ID);
     setCurrentStory(null);
     setCurrentImageUrl(null);
-    setError(null);
+    setError(null); // Clear previous errors
     setIsTimelineVisible(false);
     setIsPerformingRewindFetch(false); 
     resetPaginationStates();
@@ -444,7 +468,7 @@ const App: React.FC = () => {
     setIsSettingsBarVisible(false);
     setCurrentStory(null); 
     setCurrentImageUrl(null); 
-    setError(null); 
+    // setError(null); // Keep API key error if it exists and images are enabled
     setIsLoading(false); 
     setGameState('menu');
   };
@@ -457,7 +481,7 @@ const App: React.FC = () => {
 
   const handlePreviousPage = () => {
      if (pagination.currentPageIndex > 0) {
-      setPagination(prev => ({ ...prev, currentPageIndex: prev.currentPageIndex - 1 }));
+      setPagination(prev => ({ ...prev, currentPageIndex: prev.currentPageIndex + 1 }));
     }
   };
   
@@ -469,12 +493,15 @@ const App: React.FC = () => {
     setIsMusicMuted(prev => !prev);
   };
   
-  if (gameState === 'error_apikey' || (gameState === 'menu' && !apiKeyChecked && !process.env.API_KEY)) {
-    if (!apiKeyChecked && !isLoading) { 
-        return <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
-            <LoadingIndicator text="Initializing Systems..."/>
-        </div>;
-    }
+  if (!isInitialCheckComplete) {
+    return (
+      <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
+        <LoadingIndicator text="Initializing Systems..." />
+      </div>
+    );
+  }
+
+  if (gameState === 'error_apikey') { // This screen is now only shown if ENABLE_IMAGE_GENERATION is true & key fails
     return (
       <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
         <header className="mb-8 text-center">
@@ -483,15 +510,28 @@ const App: React.FC = () => {
           </h1>
         </header>
         <div className="w-full max-w-xl p-6 sm:p-8 my-8 text-center bg-black bg-opacity-70 rounded-xl shadow-xl border-2 border-red-700">
-          <h2 className="text-2xl sm:text-3xl font-semibold mb-4 text-red-400">A Key is Missing</h2>
-          <p className="text-lg text-gray-200">{error || "The story remains untold without a valid API Key. Please configure it to begin."}</p>
+          <h2 className="text-2xl sm:text-3xl font-semibold mb-4 text-red-400">Configuration Issue</h2>
+          <p className="text-lg text-gray-200">{error || "An unexpected error occurred with AI services."}</p>
+          {error && error.toLowerCase().includes("api key") && ENABLE_IMAGE_GENERATION && (
+             <p className="text-sm text-gray-400 mt-4">
+              You can set <code className="bg-gray-700 px-1 rounded">ENABLE_IMAGE_GENERATION</code> to <code className="bg-gray-700 px-1 rounded mx-px">false</code> in <code className="bg-gray-700 px-1 rounded mx-px">constants.ts</code> to play the story without images.
+            </p>
+          )}
+           <div className="mt-6">
+            <ActionButton
+              text="Return to Menu"
+              onClick={returnToMenu}
+              className="bg-gray-600 hover:bg-gray-500 text-white w-auto px-6 py-2"
+            />
+          </div>
         </div>
       </div>
     );
   }
 
+
   if (gameState === 'menu') {
-    if (!isMusicPlayingOnMenu) {
+    if (!isMusicPlayingOnMenu && userInteractedOnce) { // Show loader only after interaction if music isn't playing
       return (
         <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
           <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
@@ -501,11 +541,7 @@ const App: React.FC = () => {
             </h1>
           </header>
           <main className="w-full max-w-sm text-center">
-            {!userInteractedOnce ? (
-              <p className="text-gray-400 mt-4 text-lg">Tap anywhere to immerse yourself.</p>
-            ) : (
-              <LoadingIndicator text="Setting the scene..." />
-            )}
+            <LoadingIndicator text="Setting the scene..." />
           </main>
           <footer className="mt-12 text-center text-sm text-gray-500">
             <p>Story inspired by The Housemaid by Freida McFadden. App by Moe.</p>
@@ -513,7 +549,8 @@ const App: React.FC = () => {
         </div>
       );
     }
-    // Else (isMusicPlayingOnMenu is true), render the actual menu
+    
+    // If music is playing OR user hasn't interacted yet (initial prompt)
     return (
       <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
          <audio ref={audioRef} src={MUSIC_URL} preload="auto" />
@@ -521,14 +558,21 @@ const App: React.FC = () => {
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-red-700 via-red-600 to-red-500 animate-pulse">
             The Housemaid
           </h1>
-          <p className="text-gray-400 mt-4 text-lg">The house holds its breath. Your choices define the silence.</p>
+          {!userInteractedOnce && (
+             <p className="text-gray-400 mt-4 text-lg">Tap anywhere to immerse yourself.</p>
+          )}
+          {userInteractedOnce && isMusicPlayingOnMenu && (
+             <p className="text-gray-400 mt-4 text-lg">The house holds its breath. Your choices define the silence.</p>
+          )}
         </header>
         <main className="w-full max-w-sm">
-          <ActionButton
-            text="Begin Chapter 1"
-            onClick={startGame}
-            className="bg-red-700 hover:bg-red-800 border-2 border-red-900 text-white focus:ring-red-500 py-4 text-xl"
-          />
+          {(userInteractedOnce && isMusicPlayingOnMenu) && (
+            <ActionButton
+              text="Begin Chapter 1"
+              onClick={startGame}
+              className="bg-red-700 hover:bg-red-800 border-2 border-red-900 text-white focus:ring-red-500 py-4 text-xl"
+            />
+          )}
         </main>
         <footer className="mt-12 text-center text-sm text-gray-500">
           <p>Story inspired by The Housemaid by Freida McFadden. App by Moe.</p>
